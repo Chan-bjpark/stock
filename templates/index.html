@@ -22,6 +22,10 @@
                     <button class="toggle-btn" onclick="toggleAll()">전체 해제</button>
                 </div>
                 <div id="resultList" class="result-list"></div>
+                <div class="add-stock-bar">
+                    <input type="text" id="addStockInput" class="add-stock-input" placeholder="종목명 또는 종목코드 입력">
+                    <button class="add-stock-btn" onclick="addStock()">추가</button>
+                </div>
                 <button class="btn-primary" onclick="viewDashboard()">대시보드 보기</button>
             </div>
         </div>
@@ -80,6 +84,53 @@
             allChecked = !allChecked;
             document.querySelectorAll('#resultList input[type=checkbox]').forEach(cb => cb.checked = allChecked);
             document.querySelector('.toggle-btn').textContent = allChecked ? '전체 해제' : '전체 선택';
+        }
+
+        document.getElementById('addStockInput').addEventListener('keydown', e => { if (e.key === 'Enter') addStock(); });
+
+        async function addStock() {
+            const input = document.getElementById('addStockInput');
+            const query = input.value.trim();
+            if (!query) return;
+
+            // 검색 결과 영역이 안 보이면 표시
+            const resultsDiv = document.getElementById('searchResults');
+            resultsDiv.style.display = 'block';
+
+            try {
+                const resp = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
+                const stocks = await resp.json();
+                if (stocks.length === 0) { alert('종목을 찾을 수 없습니다.'); return; }
+
+                const listDiv = document.getElementById('resultList');
+                const existing = new Set();
+                listDiv.querySelectorAll('input[type=checkbox]').forEach(cb => existing.add(cb.value));
+
+                let added = 0;
+                for (const s of stocks) {
+                    if (!existing.has(s.code)) {
+                        existing.add(s.code);
+                        const label = document.createElement('label');
+                        label.className = 'result-item added-item';
+                        label.innerHTML = `
+                            <input type="checkbox" checked value="${s.code}" data-name="${s.name}">
+                            <span class="result-name">${s.name}</span>
+                            <span class="result-market">${s.market || ''}</span>
+                            <span class="result-code">${s.code}</span>
+                        `;
+                        listDiv.appendChild(label);
+                        added++;
+                    }
+                }
+
+                // 카운트 업데이트
+                const total = listDiv.querySelectorAll('input[type=checkbox]').length;
+                document.getElementById('resultCount').textContent = `${total}개 종목`;
+                input.value = '';
+                if (added === 0) alert('이미 목록에 있는 종목입니다.');
+            } catch (e) {
+                alert('종목 검색에 실패했습니다.');
+            }
         }
 
         function viewDashboard() {

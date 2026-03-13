@@ -424,6 +424,52 @@ h1 {
     font-size: 0.9rem;
 }
 
+.add-stock-bar {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #e5e5e5;
+}
+
+.add-stock-input {
+    flex: 1;
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    background: #fff;
+    color: #333;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.add-stock-input:focus {
+    border-color: #888;
+}
+
+.add-stock-btn {
+    padding: 8px 16px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    font-family: inherit;
+    background: #555;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.add-stock-btn:hover {
+    background: #333;
+}
+
+.added-item {
+    background: #f0f7ff;
+}
+
 .btn-primary {
     display: block;
     width: 100%;
