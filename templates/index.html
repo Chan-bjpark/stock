@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>그룹별 주가 현황</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container home-container">
+        <h1>그룹별 주가 현황</h1>
+        <div class="group-list">
+            {% for gid, g in groups.items() %}
+            <a href="/{{ gid }}" class="group-card">
+                <span class="group-name">{{ g.name }}</span>
+                <span class="group-count">{{ g.stocks|length }}개 상장사</span>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
