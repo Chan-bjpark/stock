@@ -1,5 +1,6 @@
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 from flask import Flask, render_template, jsonify, request
@@ -167,9 +168,9 @@ def fetch_daily_prices(code, max_pages=20):
     return all_rows
 
 
-def fetch_daily_ohlc(code, max_pages=30):
+def fetch_daily_ohlc(code, max_pages=20):
     all_rows = []
-    cutoff = datetime.now() - timedelta(days=400)
+    cutoff = datetime.now() - timedelta(days=370)
     for page in range(1, max_pages + 1):
         url = f"https://finance.naver.com/item/sise_day.naver?code={code}&page={page}"
         resp = requests.get(url, headers=HEADERS, timeout=10)
@@ -239,57 +240,68 @@ def format_market_cap(cap_num):
 # --- Helper: fetch stock list for any source ---
 
 def _fetch_stocks_data(stock_list):
-    results = [fetch_stock(code, name) for code, name in stock_list]
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = {ex.submit(fetch_stock, code, name): (code, name)
+                   for code, name in stock_list}
+        results = [f.result() for f in as_completed(futures)]
     results.sort(key=lambda x: x.get("market_cap_raw", 0), reverse=True)
     return results
 
 
+def _fetch_one_monthly(code, name):
+    try:
+        daily = fetch_daily_ohlc(code, max_pages=20)
+        candles = aggregate_monthly_candles(daily)
+        return code, candles[-12:] if len(candles) > 12 else candles
+    except Exception:
+        return code, []
+
+
 def _fetch_monthly_data(stock_list):
-    results = {}
-    for code, name in stock_list:
-        try:
-            daily = fetch_daily_ohlc(code, max_pages=30)
-            candles = aggregate_monthly_candles(daily)
-            results[code] = candles[-12:] if len(candles) > 12 else candles
-        except Exception:
-            results[code] = []
-    return results
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = [ex.submit(_fetch_one_monthly, code, name)
+                   for code, name in stock_list]
+        return {code: candles for f in as_completed(futures)
+                for code, candles in [f.result()]}
+
+
+def _fetch_one_history(code, name, target_date):
+    try:
+        shares = fetch_shares_outstanding(code)
+        daily = fetch_daily_prices(code, max_pages=20)
+        matched = None
+        for row in daily:
+            if row["date"] == target_date:
+                matched = row
+                break
+        if matched:
+            close_num = int(matched["close"].replace(",", ""))
+            market_cap = "-"
+            if shares:
+                cap = close_num * shares // 100_000_000
+                market_cap = format_market_cap(cap)
+            return {
+                "code": code, "name": name,
+                "date": matched["date"], "close": matched["close"],
+                "market_cap": market_cap,
+            }
+        return {
+            "code": code, "name": name, "date": target_date,
+            "close": "-", "market_cap": "-",
+            "error": "해당 날짜 데이터 없음",
+        }
+    except Exception as e:
+        return {
+            "code": code, "name": name, "date": target_date,
+            "close": "-", "market_cap": "-", "error": str(e),
+        }
 
 
 def _fetch_history_data(stock_list, target_date):
-    results = []
-    for code, name in stock_list:
-        try:
-            shares = fetch_shares_outstanding(code)
-            daily = fetch_daily_prices(code, max_pages=20)
-            matched = None
-            for row in daily:
-                if row["date"] == target_date:
-                    matched = row
-                    break
-            if matched:
-                close_num = int(matched["close"].replace(",", ""))
-                market_cap = "-"
-                if shares:
-                    cap = close_num * shares // 100_000_000
-                    market_cap = format_market_cap(cap)
-                results.append({
-                    "code": code, "name": name,
-                    "date": matched["date"], "close": matched["close"],
-                    "market_cap": market_cap,
-                })
-            else:
-                results.append({
-                    "code": code, "name": name, "date": target_date,
-                    "close": "-", "market_cap": "-",
-                    "error": "해당 날짜 데이터 없음",
-                })
-        except Exception as e:
-            results.append({
-                "code": code, "name": name, "date": target_date,
-                "close": "-", "market_cap": "-", "error": str(e),
-            })
-    return results
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = [ex.submit(_fetch_one_history, code, name, target_date)
+                   for code, name in stock_list]
+        return [f.result() for f in as_completed(futures)]
 
 
 def _parse_stocks_param(raw):
