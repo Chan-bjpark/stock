@@ -236,55 +236,29 @@ def format_market_cap(cap_num):
     return f"{cap_num:,}억"
 
 
-# --- Routes ---
+# --- Helper: fetch stock list for any source ---
 
-@app.route("/")
-def index():
-    return render_template("index.html", groups=GROUPS)
-
-
-@app.route("/<group_id>")
-def group_page(group_id):
-    if group_id not in GROUPS:
-        return "Not Found", 404
-    group = GROUPS[group_id]
-    return render_template("group.html", group_id=group_id, group_name=group["name"])
-
-
-@app.route("/api/<group_id>/stocks")
-def api_stocks(group_id):
-    if group_id not in GROUPS:
-        return jsonify({"error": "Unknown group"}), 404
-    stocks = GROUPS[group_id]["stocks"]
-    results = [fetch_stock(code, name) for code, name in stocks]
+def _fetch_stocks_data(stock_list):
+    results = [fetch_stock(code, name) for code, name in stock_list]
     results.sort(key=lambda x: x.get("market_cap_raw", 0), reverse=True)
-    return jsonify(results)
+    return results
 
 
-@app.route("/api/<group_id>/stocks/monthly")
-def api_stocks_monthly(group_id):
-    if group_id not in GROUPS:
-        return jsonify({"error": "Unknown group"}), 404
-    stocks = GROUPS[group_id]["stocks"]
+def _fetch_monthly_data(stock_list):
     results = {}
-    for code, name in stocks:
+    for code, name in stock_list:
         try:
             daily = fetch_daily_ohlc(code, max_pages=30)
             candles = aggregate_monthly_candles(daily)
             results[code] = candles[-12:] if len(candles) > 12 else candles
         except Exception:
             results[code] = []
-    return jsonify(results)
+    return results
 
 
-@app.route("/api/<group_id>/stocks/history")
-def api_stocks_history(group_id):
-    if group_id not in GROUPS:
-        return jsonify({"error": "Unknown group"}), 404
-    stocks = GROUPS[group_id]["stocks"]
-    target_date = request.args.get("date", "").replace("-", ".")
+def _fetch_history_data(stock_list, target_date):
     results = []
-    for code, name in stocks:
+    for code, name in stock_list:
         try:
             shares = fetch_shares_outstanding(code)
             daily = fetch_daily_prices(code, max_pages=20)
@@ -315,7 +289,111 @@ def api_stocks_history(group_id):
                 "code": code, "name": name, "date": target_date,
                 "close": "-", "market_cap": "-", "error": str(e),
             })
-    return jsonify(results)
+    return results
+
+
+def _parse_stocks_param(raw):
+    stocks = []
+    for item in raw.split(","):
+        if ":" in item:
+            code, name = item.split(":", 1)
+            if re.match(r"^\d{6}$", code):
+                stocks.append((code, name))
+    return stocks
+
+
+# --- Routes ---
+
+@app.route("/")
+def index():
+    return render_template("index.html", groups=GROUPS)
+
+
+@app.route("/<group_id>")
+def group_page(group_id):
+    if group_id not in GROUPS:
+        return "Not Found", 404
+    group = GROUPS[group_id]
+    return render_template("group.html", group_id=group_id, group_name=group["name"])
+
+
+@app.route("/dashboard")
+def custom_dashboard():
+    raw = request.args.get("stocks", "")
+    label = request.args.get("label", "검색 결과")
+    stocks = _parse_stocks_param(raw)
+    if not stocks:
+        return "No stocks selected", 400
+    return render_template("dashboard.html", stocks=stocks, label=label)
+
+
+# --- Search API ---
+
+@app.route("/api/search")
+def api_search():
+    query = request.args.get("query", "").strip()
+    if not query:
+        return jsonify([])
+    url = f"https://ac.stock.naver.com/ac?q={query}&target=stock"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        data = resp.json()
+        results = []
+        for item in data.get("items", []):
+            if item.get("nationCode") == "KOR":
+                results.append({
+                    "code": item["code"],
+                    "name": item["name"],
+                    "market": item.get("typeName", ""),
+                })
+        return jsonify(results)
+    except Exception:
+        return jsonify([])
+
+
+# --- Group API (existing) ---
+
+@app.route("/api/<group_id>/stocks")
+def api_stocks(group_id):
+    if group_id not in GROUPS:
+        return jsonify({"error": "Unknown group"}), 404
+    return jsonify(_fetch_stocks_data(GROUPS[group_id]["stocks"]))
+
+
+@app.route("/api/<group_id>/stocks/monthly")
+def api_stocks_monthly(group_id):
+    if group_id not in GROUPS:
+        return jsonify({"error": "Unknown group"}), 404
+    return jsonify(_fetch_monthly_data(GROUPS[group_id]["stocks"]))
+
+
+@app.route("/api/<group_id>/stocks/history")
+def api_stocks_history(group_id):
+    if group_id not in GROUPS:
+        return jsonify({"error": "Unknown group"}), 404
+    target_date = request.args.get("date", "").replace("-", ".")
+    return jsonify(_fetch_history_data(GROUPS[group_id]["stocks"], target_date))
+
+
+# --- Custom Dashboard API ---
+
+@app.route("/api/custom/stocks", methods=["POST"])
+def api_custom_stocks():
+    stock_list = [(s["code"], s["name"]) for s in (request.json or [])]
+    return jsonify(_fetch_stocks_data(stock_list))
+
+
+@app.route("/api/custom/stocks/monthly", methods=["POST"])
+def api_custom_monthly():
+    stock_list = [(s["code"], s["name"]) for s in (request.json or [])]
+    return jsonify(_fetch_monthly_data(stock_list))
+
+
+@app.route("/api/custom/stocks/history", methods=["POST"])
+def api_custom_history():
+    stock_list = [(s["code"], s["name"]) for s in (request.json or [])]
+    target_date = request.args.get("date", "").replace("-", ".")
+    return jsonify(_fetch_history_data(stock_list, target_date))
 
 
 if __name__ == "__main__":

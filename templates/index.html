@@ -3,20 +3,92 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>그룹별 주가 현황</title>
+    <title>주가 대시보드</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="container home-container">
-        <h1>그룹별 주가 현황</h1>
-        <div class="group-list">
-            {% for gid, g in groups.items() %}
-            <a href="/{{ gid }}" class="group-card">
-                <span class="group-name">{{ g.name }}</span>
-                <span class="group-count">{{ g.stocks|length }}개 상장사</span>
-            </a>
-            {% endfor %}
+        <h1>주가 대시보드</h1>
+
+        <div class="search-section">
+            <div class="search-bar">
+                <input type="text" id="searchInput" class="search-input" placeholder="그룹/회사명 검색 (예: HLB, 한화, 삼성)">
+                <button class="search-btn" onclick="searchStocks()">검색</button>
+            </div>
+
+            <div id="searchResults" class="search-results" style="display:none;">
+                <div class="search-results-header">
+                    <span id="resultCount"></span>
+                    <button class="toggle-btn" onclick="toggleAll()">전체 해제</button>
+                </div>
+                <div id="resultList" class="result-list"></div>
+                <button class="btn-primary" onclick="viewDashboard()">대시보드 보기</button>
+            </div>
+        </div>
+
+        <div class="quick-access">
+            <h2>바로가기</h2>
+            <div class="group-list">
+                {% for gid, g in groups.items() %}
+                <a href="/{{ gid }}" class="group-card">
+                    <span class="group-name">{{ g.name }}</span>
+                    <span class="group-count">{{ g.stocks|length }}개 상장사</span>
+                </a>
+                {% endfor %}
+            </div>
         </div>
     </div>
+
+    <script>
+        const searchInput = document.getElementById('searchInput');
+        searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') searchStocks(); });
+
+        let allChecked = true;
+
+        async function searchStocks() {
+            const query = searchInput.value.trim();
+            if (!query) return;
+            const resultsDiv = document.getElementById('searchResults');
+            const listDiv = document.getElementById('resultList');
+            listDiv.innerHTML = '<div class="search-loading">검색 중...</div>';
+            resultsDiv.style.display = 'block';
+
+            try {
+                const resp = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
+                const stocks = await resp.json();
+                if (stocks.length === 0) {
+                    listDiv.innerHTML = '<div class="search-loading">검색 결과가 없습니다.</div>';
+                    document.getElementById('resultCount').textContent = '';
+                    return;
+                }
+                document.getElementById('resultCount').textContent = `${stocks.length}개 종목`;
+                listDiv.innerHTML = stocks.map(s => `
+                    <label class="result-item">
+                        <input type="checkbox" checked value="${s.code}" data-name="${s.name}">
+                        <span class="result-name">${s.name}</span>
+                        <span class="result-market">${s.market || ''}</span>
+                        <span class="result-code">${s.code}</span>
+                    </label>
+                `).join('');
+                allChecked = true;
+            } catch (e) {
+                listDiv.innerHTML = '<div class="search-loading">검색에 실패했습니다.</div>';
+            }
+        }
+
+        function toggleAll() {
+            allChecked = !allChecked;
+            document.querySelectorAll('#resultList input[type=checkbox]').forEach(cb => cb.checked = allChecked);
+            document.querySelector('.toggle-btn').textContent = allChecked ? '전체 해제' : '전체 선택';
+        }
+
+        function viewDashboard() {
+            const checked = document.querySelectorAll('#resultList input[type=checkbox]:checked');
+            if (checked.length === 0) { alert('종목을 선택해주세요.'); return; }
+            const pairs = Array.from(checked).map(cb => `${cb.value}:${cb.dataset.name}`);
+            const query = searchInput.value.trim();
+            window.location.href = `/dashboard?stocks=${encodeURIComponent(pairs.join(','))}&label=${encodeURIComponent(query)}`;
+        }
+    </script>
 </body>
 </html>

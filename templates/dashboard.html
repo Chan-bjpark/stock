@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ label }} 주가 현황</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <a href="/" class="back-link">← 목록</a>
+                <h1>{{ label }} 주가 현황</h1>
+            </div>
+            <div class="date-bar">
+                <button class="date-btn active" id="btnRealtime" onclick="setRealtime()">실시간</button>
+                <div class="date-picker-wrap">
+                    <input type="date" id="datePicker" class="date-input">
+                    <button class="date-btn" id="btnSearch" onclick="loadHistory()">조회</button>
+                </div>
+            </div>
+            <p class="updated-at" id="updatedAt">불러오는 중...</p>
+        </header>
+
+        <div class="stock-grid" id="stockGrid">
+            <div class="loading">주가 정보를 불러오고 있습니다...</div>
+        </div>
+    </div>
+
+    <script>
+        const STOCKS = {{ stocks | tojson }};
+        const STOCK_LIST = STOCKS.map(s => ({code: s[0], name: s[1]}));
+        let isRealtime = true;
+        let monthlyData = {};
+
+        function formatNumber(str) {
+            if (!str || str === '-') return '-';
+            return str;
+        }
+
+        function drawCandleChart(canvasId, candles) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas || !candles || candles.length === 0) return;
+            const ctx = canvas.getContext('2d');
+            const dpr = window.devicePixelRatio || 1;
+            const w = canvas.clientWidth;
+            const h = canvas.clientHeight;
+            canvas.width = w * dpr;
+            canvas.height = h * dpr;
+            ctx.scale(dpr, dpr);
+            let minP = Infinity, maxP = 0;
+            for (const c of candles) { minP = Math.min(minP, c.low); maxP = Math.max(maxP, c.high); }
+            const range = maxP - minP || 1;
+            const pad = 2, chartH = h - pad * 2;
+            const count = candles.length, gap = 1;
+            const slotW = (w - gap) / count;
+            const bodyW = Math.max(slotW * 0.6, 2);
+            function yPos(price) { return pad + chartH - ((price - minP) / range) * chartH; }
+            ctx.clearRect(0, 0, w, h);
+            candles.forEach((c, i) => {
+                const x = gap + i * slotW + slotW / 2;
+                const isUp = c.close >= c.open;
+                const color = isUp ? '#dc2626' : '#2563eb';
+                ctx.strokeStyle = color; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(x, yPos(c.high)); ctx.lineTo(x, yPos(c.low)); ctx.stroke();
+                const bodyTop = yPos(Math.max(c.open, c.close));
+                const bodyBot = yPos(Math.min(c.open, c.close));
+                ctx.fillStyle = color;
+                ctx.fillRect(x - bodyW / 2, bodyTop, bodyW, Math.max(bodyBot - bodyTop, 1));
+            });
+        }
+
+        function drawAllCharts() {
+            for (const code of Object.keys(monthlyData)) {
+                drawCandleChart('chart-' + code, monthlyData[code]);
+            }
+        }
+
+        async function loadMonthlyData() {
+            try {
+                const resp = await fetch('/api/custom/stocks/monthly', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(STOCK_LIST)
+                });
+                monthlyData = await resp.json();
+                drawAllCharts();
+            } catch (e) {}
+        }
+
+        function setRealtime() {
+            isRealtime = true;
+            document.getElementById('btnRealtime').classList.add('active');
+            document.getElementById('datePicker').value = '';
+            loadStocks();
+        }
+
+        function createStockCard(stock) {
+            const dirClass = stock.direction === 'up' ? 'up' : stock.direction === 'down' ? 'down' : 'flat';
+            const arrow = stock.direction === 'up' ? '▲' : stock.direction === 'down' ? '▼' : '';
+            const sign = stock.direction === 'up' ? '+' : stock.direction === 'down' ? '-' : '';
+            return `
+                <div class="stock-card ${dirClass}">
+                    <div class="stock-header">
+                        <div class="stock-header-left">
+                            <span class="stock-name">${stock.name}</span>
+                            <span class="stock-code">${stock.code}</span>
+                        </div>
+                        <div class="chart-area">
+                            <canvas id="chart-${stock.code}" class="mini-chart"></canvas>
+                        </div>
+                    </div>
+                    <div class="stock-price">${formatNumber(stock.price)}원</div>
+                    <div class="stock-change">
+                        <span class="change-value">${arrow} ${sign}${formatNumber(stock.change)}</span>
+                        <span class="change-rate">(${formatNumber(stock.rate)}%)</span>
+                    </div>
+                    <div class="stock-info">
+                        <div class="info-item">
+                            <span class="info-label">시가총액</span>
+                            <span class="info-value">${formatNumber(stock.market_cap)}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">거래량</span>
+                            <span class="info-value">${formatNumber(stock.volume)}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">거래금액</span>
+                            <span class="info-value">${formatNumber(stock.trade_amount)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function loadStocks() {
+            const grid = document.getElementById('stockGrid');
+            grid.innerHTML = '<div class="loading">주가 정보를 불러오고 있습니다...</div>';
+            try {
+                const resp = await fetch('/api/custom/stocks', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(STOCK_LIST)
+                });
+                const stocks = await resp.json();
+                grid.innerHTML = stocks.map(createStockCard).join('');
+                const now = new Date();
+                const timeStr = now.toLocaleString('ko-KR', {
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+                document.getElementById('updatedAt').textContent = `실시간 · ${timeStr}`;
+                if (Object.keys(monthlyData).length > 0) drawAllCharts();
+            } catch (e) {
+                grid.innerHTML = '<div class="loading error">주가 정보를 불러오지 못했습니다.</div>';
+            }
+        }
+
+        function createHistoryCard(stock) {
+            const hasError = stock.close === '-';
+            return `
+                <div class="stock-card history-card ${hasError ? 'flat' : ''}">
+                    <div class="stock-header">
+                        <div class="stock-header-left">
+                            <span class="stock-name">${stock.name}</span>
+                            <span class="stock-code">${stock.code}</span>
+                        </div>
+                        <div class="chart-area">
+                            <canvas id="chart-${stock.code}" class="mini-chart"></canvas>
+                        </div>
+                    </div>
+                    <div class="stock-price">${formatNumber(stock.close)}원</div>
+                    <div class="stock-info">
+                        <div class="info-item">
+                            <span class="info-label">시가총액</span>
+                            <span class="info-value">${formatNumber(stock.market_cap)}</span>
+                        </div>
+                    </div>
+                    ${stock.error ? `<div class="history-error">${stock.error}</div>` : ''}
+                </div>
+            `;
+        }
+
+        async function loadHistory() {
+            const dateVal = document.getElementById('datePicker').value;
+            if (!dateVal) { alert('날짜를 선택해주세요.'); return; }
+            isRealtime = false;
+            document.getElementById('btnRealtime').classList.remove('active');
+            const grid = document.getElementById('stockGrid');
+            const btn = document.getElementById('btnSearch');
+            btn.disabled = true; btn.textContent = '조회 중...';
+            grid.innerHTML = '<div class="loading">데이터를 불러오고 있습니다...</div>';
+            const [y, m, d] = dateVal.split('-');
+            document.getElementById('updatedAt').textContent = `${y}.${m}.${d} 종가 기준`;
+            try {
+                const resp = await fetch(`/api/custom/stocks/history?date=${dateVal}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(STOCK_LIST)
+                });
+                const stocks = await resp.json();
+                grid.innerHTML = stocks.map(createHistoryCard).join('');
+                drawAllCharts();
+            } catch (e) {
+                grid.innerHTML = '<div class="loading error">데이터를 불러오지 못했습니다.</div>';
+            } finally { btn.disabled = false; btn.textContent = '조회'; }
+        }
+
+        document.getElementById('datePicker').addEventListener('change', function() {
+            if (this.value) document.getElementById('btnRealtime').classList.remove('active');
+        });
+
+        loadStocks();
+        loadMonthlyData();
+    </script>
+</body>
+</html>
