@@ -329,26 +329,105 @@ def custom_dashboard():
 
 # --- Search API ---
 
+def _fetch_naver_group_list():
+    """네이버 금융 그룹사 목록 (그룹명 -> no 매핑)"""
+    url = "https://finance.naver.com/sise/sise_group.naver?type=group"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        groups = {}
+        for a in soup.select("a[href*='sise_group_detail']"):
+            href = a.get("href", "")
+            name = a.get_text(strip=True)
+            m = re.search(r"no=(\d+)", href)
+            if m and name:
+                groups[name] = m.group(1)
+        return groups
+    except Exception:
+        return {}
+
+
+def _fetch_naver_group_stocks(group_no):
+    """네이버 금융 그룹사 상장 계열사 목록"""
+    url = f"https://finance.naver.com/sise/sise_group_detail.naver?type=group&no={group_no}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+        seen = set()
+        for a in soup.select("a[href*='/item/main.naver?code=']"):
+            m = re.search(r"code=(\d{6})", a.get("href", ""))
+            if m:
+                code = m.group(1)
+                name = a.get_text(strip=True)
+                if name and code not in seen:
+                    seen.add(code)
+                    results.append({"code": code, "name": name, "market": "", "source": "group"})
+        return results
+    except Exception:
+        return []
+
+
 @app.route("/api/search")
 def api_search():
     query = request.args.get("query", "").strip()
     if not query:
         return jsonify([])
-    url = f"https://ac.stock.naver.com/ac?q={query}&target=stock"
+
+    results = []
+    seen = set()
+
+    # 1) 네이버 금융 그룹사 매칭 시도
+    naver_groups = _fetch_naver_group_list()
+    q_clean = query.replace("그룹", "").replace("그룹사", "").strip()
+
+    def _match_score(gname, q):
+        """매칭 점수: 낮을수록 좋음"""
+        if q == gname:
+            return 0  # 완전 일치
+        if q in gname:
+            return 1  # 쿼리가 그룹명에 포함
+        if gname in q:
+            return 1  # 그룹명이 쿼리에 포함
+        # 공통 글자수 기반 유사도 (많이 겹칠수록 좋음)
+        common = sum(1 for c in q if c in gname)
+        if common >= 2 and gname[:2] == q[:2]:
+            return 10 - common  # 공통 글자가 많을수록 점수 낮음
+        return 999
+
+    candidates = []
+    if q_clean and len(q_clean) >= 2:
+        for gname, gno in naver_groups.items():
+            score = _match_score(gname, q_clean)
+            if score < 999:
+                candidates.append((gname, gno, score))
+        candidates.sort(key=lambda x: x[2])
+    if candidates:
+        group_stocks = _fetch_naver_group_stocks(candidates[0][1])
+        for s in group_stocks:
+            if s["code"] not in seen:
+                seen.add(s["code"])
+                results.append(s)
+
+    # 2) 네이버 자동완성 검색 병합
     try:
+        url = f"https://ac.stock.naver.com/ac?q={query}&target=stock"
         resp = requests.get(url, headers=HEADERS, timeout=10)
         data = resp.json()
-        results = []
         for item in data.get("items", []):
             if item.get("nationCode") == "KOR":
-                results.append({
-                    "code": item["code"],
-                    "name": item["name"],
-                    "market": item.get("typeName", ""),
-                })
-        return jsonify(results)
+                code = item["code"]
+                if code not in seen:
+                    seen.add(code)
+                    results.append({
+                        "code": code,
+                        "name": item["name"],
+                        "market": item.get("typeName", ""),
+                    })
     except Exception:
-        return jsonify([])
+        pass
+
+    return jsonify(results)
 
 
 # --- Group API (existing) ---
