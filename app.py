@@ -250,7 +250,7 @@ def _fetch_stocks_data(stock_list):
 
 def _fetch_one_monthly(code, name):
     try:
-        daily = fetch_daily_ohlc(code, max_pages=20)
+        daily = fetch_daily_ohlc(code)
         candles = aggregate_monthly_candles(daily)
         return code, candles[-12:] if len(candles) > 12 else candles
     except Exception:
